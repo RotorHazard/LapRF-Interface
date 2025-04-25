@@ -306,7 +306,7 @@ class LapRFDevice():
                 delay_s = (random.random() * 0.5) + 0.25
                 gevent.spawn_later(delay_s, self.request_timestamp)
             else:
-                logger.debug(f'Synchronized LapRF within {self._network_timestamp_samples[0]['response']*1000:.1f}ms ({len(self._network_timestamp_samples)})')
+                logger.debug(f"Synchronized LapRF within {self._network_timestamp_samples[0]['response']*1000:.1f}ms ({len(self._network_timestamp_samples)})")
 
 
 class LapRFInterface(BaseHardwareInterface):
