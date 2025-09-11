@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 SERIAL_SCHEME = 'serial:'
 SOCKET_SCHEME = 'socket://'
+CONNECT_TIMEOUT_S = 5
 RESPONSE_TIMEOUT_S = 0.5
 WRITE_CHILL_TIME_S = 0.01
 READ_POLL_RATE = 0.1
@@ -61,6 +62,60 @@ class LapRFProvider():
 
         self.gain = None
         self.threshold = None
+
+        # run startup functions
+        rhapi.events.on(Evt.STARTUP, self.startup)
+        rhapi.events.on(Evt.SHUTDOWN, self.shutdown)
+        rhapi.events.on(Evt.RACE_STAGE, self.race_stage)
+        rhapi.events.on(Evt.RACE_STOP, self.race_stop)
+        rhapi.events.on(Evt.LAPS_CLEAR, self.laps_clear)
+        # register UI
+        rhapi.config.register_section('LapRF')
+        rhapi.ui.register_panel('provider_laprf', 'LapRF', 'settings')
+        rhapi.fields.register_option(
+            field=UIField(
+                name='address',
+                label="LapRF Address",
+                field_type=UIFieldType.TEXT,
+                desc="IP[:port] or USB port",
+                persistent_section="LapRF"
+            ),
+            panel='provider_laprf')
+        rhapi.fields.register_function_binding(
+            field=UIField(
+                name='laprf_combined_gain',
+                label="LapRF Gain (combined)",
+                field_type=UIFieldType.NUMBER,
+                html_attributes={
+                    'min': 0,
+                    'max': laprf.MAX_GAIN
+                },
+                desc="0–63 (Typical: 59)"
+            ),
+            getter_fn=self.get_combined_gain,
+            setter_fn=self.set_combined_gain,
+            args=None,
+            panel='provider_laprf')
+        rhapi.fields.register_function_binding(
+            field=UIField(
+                name='laprf_combined_threshold',
+                label="LapRF Threshold (combined)",
+                field_type=UIFieldType.NUMBER,
+                html_attributes={
+                    'min': 0,
+                    'max': laprf.MAX_THRESHOLD
+                },
+                desc="0–3000 (Typical: 800)"
+            ),
+            getter_fn=self.get_combined_threshold,
+            setter_fn=self.set_combined_threshold,
+            args=None,
+            panel='provider_laprf')
+
+        self.process_config()
+        self.init_interface()
+        rhapi.interface.add(self.interface)
+        self._update_status_markdown()
 
     def init_interface(self):
         logger.info('Initializing LapRF provider')
@@ -121,14 +176,17 @@ class LapRFProvider():
                 self.interface.stop()
             else:
                 self.interface.start()
+        self._update_status_markdown()
 
     def ui_disable(self, _args):
         self.interface.stop()
+        self._update_status_markdown()
 
     def ui_ping(self, _args):
         ping_cmd = laprf.encode_ping_record(time.monotonic())
         for device in self.devices:
             device.write(ping_cmd)
+        self._update_status_markdown()
 
     def handle_ping_response(self, device, ping_val):
         self._rhapi.ui.message_notify(f"Got Ping from LapRF at {device.addr}: {ping_val}")
@@ -163,9 +221,13 @@ class LapRFProvider():
 
     def set_combined_gain(self, value, _args):
         self.interface.set_all_gains(int(value))
+        self.gain = value
+        self._update_status_markdown()
 
     def set_combined_threshold(self, value, _args):
         self.interface.set_all_thresholds(int(value))
+        self.threshold = value
+        self._update_status_markdown()
 
     def race_stage(self, _args):
         self.interface.set_state(laprf.States.START_RACE)
@@ -175,6 +237,27 @@ class LapRFProvider():
 
     def laps_clear(self, _args):
         self.interface.set_state(laprf.States.STOP_RACE)
+
+    def _update_status_markdown(self):
+        md_output = '_Refresh page to update status_\n'
+        if self.interface and len(self.interface.devices):
+            for device in self.interface.devices:
+                md_output += f"# LapRF Device at {device.addr}\n"
+                if device.connected:
+                    if len(device._network_timestamp_samples):
+                        md_output += f"Sync within {device._network_timestamp_samples[0]['response'] * 1000}\n"
+                    md_output += f"Offset {device._time_offset}\n"
+
+                    md_output += f"## Nodes\n"
+                    for node in device.nodes:
+                        md_output += f"Index: RH-{node.index} Device-{node.local_index} / Gain: {node.gain} Threshold: {node.threshold}\n"
+                else:
+                    md_output += "Device not connected\n"
+        else:
+            md_output += "No devices connected."
+
+        self._rhapi.ui.register_markdown('provider_laprf', 'laprf_status', md_output)
+
 
 class LapRFNode(Node):
     def __init__(self, device, local_index):
@@ -241,7 +324,7 @@ class LapRFDevice():
             host_port = socket_addr.split(':')
             if len(host_port) == 1:
                 host_port = (host_port[0], 5403)
-            io_stream = SocketStream(socket.create_connection(host_port))
+            io_stream = SocketStream(socket.create_connection(host_port, timeout=CONNECT_TIMEOUT_S))
         else:
             raise ValueError("Unsupported address: {}".format(self.addr))
         return io_stream
@@ -441,7 +524,7 @@ class LapRFInterface(BaseHardwareInterface):
             node = device.nodes[local_index]
             node.pass_peak_rssi = record.peak_height
             node.node_peak_rssi = max(record.peak_height, node.node_peak_rssi)
-            self.pass_record_callback(node, device.server_timestamp_from_laprf(record.rtc_time), LapSource.REALTIME)
+            self.pass_record_callback(node, device.server_timestamp_from_laprf(record.rtc_time), LapSource.REALTIME, peak=record.peak_height)
 
             # if self.is_racing:
             #     node.pass_history.append(RssiSample(lap_ts_ms + self.race_start_time_ms, pass_peak_rssi))
@@ -621,56 +704,5 @@ class LapRFInterface(BaseHardwareInterface):
 
 def initialize(rhapi):
     # initialize class
-    provider = LapRFProvider(rhapi)
-    # run startup functions
-    rhapi.events.on(Evt.STARTUP, provider.startup)
-    rhapi.events.on(Evt.SHUTDOWN, provider.shutdown)
-    rhapi.events.on(Evt.RACE_STAGE, provider.race_stage)
-    rhapi.events.on(Evt.RACE_STOP, provider.race_stop)
-    rhapi.events.on(Evt.LAPS_CLEAR, provider.laps_clear)
-    # register UI
-    rhapi.config.register_section('LapRF')
-    rhapi.ui.register_panel('provider_laprf', 'LapRF', 'settings')
-    rhapi.fields.register_option(
-        field=UIField(
-            name='address',
-            label="LapRF Address",
-            field_type=UIFieldType.TEXT,
-            desc="IP[:port] or USB port",
-            persistent_section="LapRF"
-        ),
-        panel='provider_laprf')
-    rhapi.fields.register_variable(
-        field=UIField(
-            name='laprf_combined_gain',
-            label="LapRF Gain (combined)",
-            field_type=UIFieldType.NUMBER,
-            html_attributes={
-                'min': 0,
-                'max': laprf.MAX_GAIN
-            },
-            desc="0–63 (Typical: 59)"
-        ),
-        getter_fn=provider.get_combined_gain,
-        setter_fn=provider.set_combined_gain,
-        args=None,
-        panel='provider_laprf')
-    rhapi.fields.register_variable(
-        field=UIField(
-            name='laprf_combined_threshold',
-            label="LapRF Threshold (combined)",
-            field_type=UIFieldType.NUMBER,
-            html_attributes={
-                'min': 0,
-                'max': laprf.MAX_THRESHOLD
-            },
-            desc="0–3000 (Typical: 800)"
-        ),
-        getter_fn=provider.get_combined_threshold,
-        setter_fn=provider.set_combined_threshold,
-        args=None,
-        panel='provider_laprf')
+    LapRFProvider(rhapi)
 
-    num_devices = provider.process_config()
-    provider.init_interface()
-    rhapi.interface.add(provider.interface)

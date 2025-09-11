@@ -8,6 +8,6 @@
     "license": "RotorHazard",
     "license_uri": "https://github.com/RotorHazard/RotorHazard/blob/main/LICENSE",
     "version": "1.0.0",
-    "required_rhapi_version": "1.3",
+    "required_rhapi_version": "1.4",
     "category": ["Race Management"]
 }
