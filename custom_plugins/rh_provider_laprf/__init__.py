@@ -62,6 +62,8 @@ class LapRFProvider():
 
         self.gain = None
         self.threshold = None
+        self.gains = [None] * 8
+        self.thresholds = [None] * 8
         self.min_lap = 1
 
         # run startup functions
@@ -85,7 +87,7 @@ class LapRFProvider():
         rhapi.fields.register_function_binding(
             field=UIField(
                 name='laprf_combined_gain',
-                label="LapRF Gain (combined)",
+                label="Gain (combined)",
                 field_type=UIFieldType.NUMBER,
                 html_attributes={
                     'min': 0,
@@ -97,10 +99,11 @@ class LapRFProvider():
             setter_fn=self.set_combined_gain,
             args=None,
             panel='provider_laprf')
+        '''
         rhapi.fields.register_function_binding(
             field=UIField(
                 name='laprf_combined_threshold',
-                label="LapRF Threshold (combined)",
+                label="Threshold (combined)",
                 field_type=UIFieldType.NUMBER,
                 html_attributes={
                     'min': 0,
@@ -115,7 +118,7 @@ class LapRFProvider():
         rhapi.fields.register_function_binding(
             field=UIField(
                 name='laprf_min_lap_time',
-                label="LapRF Minimum Lap Time (ms)",
+                label="Minimum Lap Time (ms)",
                 field_type=UIFieldType.NUMBER,
                 html_attributes={
                     'min': 0
@@ -126,6 +129,38 @@ class LapRFProvider():
             setter_fn=self.set_min_lap,
             args=None,
             panel='provider_laprf')
+        '''
+        for idx in range(8):
+            rhapi.fields.register_function_binding(
+                field=UIField(
+                    name='laprf_gain_{}'.format(idx),
+                    label="Gain {}".format(idx + 1),
+                    field_type=UIFieldType.NUMBER,
+                    html_attributes={
+                        'min': 0,
+                        'max': laprf.MAX_GAIN
+                    },
+                    desc="0–63 (Typical: 59)"
+                ),
+                getter_fn=self.get_gain,
+                setter_fn=self.set_gain,
+                args={'index': idx},
+                panel='provider_laprf')
+            rhapi.fields.register_function_binding(
+                field=UIField(
+                    name='laprf_threshold_{}'.format(idx),
+                    label="Threshold {}".format(idx + 1),
+                    field_type=UIFieldType.NUMBER,
+                    html_attributes={
+                        'min': 0,
+                        'max': laprf.MAX_THRESHOLD
+                    },
+                    desc="0–3000 (Typical: 800)"
+                ),
+                getter_fn=self.get_threshold,
+                setter_fn=self.set_threshold,
+                args={'index': idx},
+                panel='provider_laprf')
         self.process_config()
         self.init_interface()
         rhapi.interface.add(self.interface)
@@ -226,14 +261,23 @@ class LapRFProvider():
                 node = device.nodes[0]
                 self.gain = node.gain
                 self.threshold = node.threshold
+                for idx, node in enumerate(device.nodes):
+                    self.gains[idx] = node.gain
+                    self.thresholds[idx] = node.threshold
 
-    def get_combined_gain(self):
+    def get_combined_gain(self, _args):
         return self.gain
 
-    def get_combined_threshold(self):
+    def get_combined_threshold(self, _args):
         return self.threshold
 
-    def get_min_lap(self):
+    def get_gain(self, args):
+        return self.gains[args.get('index')]
+
+    def get_threshold(self, args):
+        return self.thresholds[args.get('index')]
+
+    def get_min_lap(self, _args):
         return self.min_lap
 
     def set_combined_gain(self, value, _args):
@@ -244,6 +288,16 @@ class LapRFProvider():
     def set_combined_threshold(self, value, _args):
         self.interface.set_all_thresholds(int(value))
         self.threshold = value
+        self._update_status_markdown()
+
+    def set_gain(self, value, args):
+        self.interface.set_gain(args.get('index'), int(value))
+        self.gains[args.get('index')] = int(value)
+        self._update_status_markdown()
+
+    def set_threshold(self, value, args):
+        self.interface.set_threshold(args.get('index'), int(value))
+        self.thresholds[args.get('index')] = int(value)
         self._update_status_markdown()
 
     def set_min_lap(self, value, _args):
@@ -269,10 +323,6 @@ class LapRFProvider():
                     if len(device._network_timestamp_samples):
                         md_output += f"Sync within {device._network_timestamp_samples[0]['response'] * 1000}\n"
                     md_output += f"Offset {device._time_offset}\n"
-
-                    md_output += f"## Nodes\n"
-                    for node in device.nodes:
-                        md_output += f"Index: RH-{node.index} Device-{node.local_index} / Gain: {node.gain} Threshold: {node.threshold}\n"
                 else:
                     md_output += "Device not connected\n"
         else:
