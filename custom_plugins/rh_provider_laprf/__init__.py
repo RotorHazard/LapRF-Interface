@@ -84,6 +84,7 @@ class LapRFProvider():
                 persistent_section="LapRF"
             ),
             panel='provider_laprf')
+        '''
         rhapi.fields.register_function_binding(
             field=UIField(
                 name='laprf_combined_gain',
@@ -99,7 +100,6 @@ class LapRFProvider():
             setter_fn=self.set_combined_gain,
             args=None,
             panel='provider_laprf')
-        '''
         rhapi.fields.register_function_binding(
             field=UIField(
                 name='laprf_combined_threshold',
@@ -115,6 +115,7 @@ class LapRFProvider():
             setter_fn=self.set_combined_threshold,
             args=None,
             panel='provider_laprf')
+        '''
         rhapi.fields.register_function_binding(
             field=UIField(
                 name='laprf_min_lap_time',
@@ -129,7 +130,6 @@ class LapRFProvider():
             setter_fn=self.set_min_lap,
             args=None,
             panel='provider_laprf')
-        '''
         for idx in range(8):
             rhapi.fields.register_function_binding(
                 field=UIField(
